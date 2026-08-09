@@ -54,7 +54,7 @@ class ActivityWatch {
         this._client = new AWClient(this._bucket.clientName, { testing: false });
 
         // subscribe to VS Code Events
-        let subscriptions: Disposable[] = [];
+        const subscriptions: Disposable[] = [];
         window.onDidChangeTextEditorSelection(this._onEvent, this, subscriptions);
         window.onDidChangeActiveTextEditor(this._onEvent, this, subscriptions);
         this._disposable = Disposable.from(...subscriptions);
@@ -119,8 +119,9 @@ class ActivityWatch {
                 this._sendHeartbeat(heartbeat);
             }
         }
-        catch (err: any) {
-            this._handleError(err);
+        catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            this._handleError(message);
         }
     }
 
