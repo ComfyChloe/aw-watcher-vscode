@@ -1,5 +1,47 @@
 # Change Log
 
+## 0.7.0
+
+Roll-up release merging all pending community contributions, adapted to the
+v0.6.0 fetch-based stack.
+
+### Added
+- Terminal tracking: active terminal name + cwd (shellIntegration with `lsof`
+  PID fallback), same-name disambiguation, all-terminal labels, terminal_count
+  (PR #48, supersedes PR #44; fixes #43).
+- Editor enrichment: cursor position, Git dirty count + remote URL, debug
+  session state, open editors, relative file path, window focus state,
+  multi-root workspace folders (PR #48).
+- `editor` heartbeat field with the dynamic app name (PR #39).
+- `workspace` heartbeat field from the `.code-workspace` name (PR #36).
+- Distinct client/bucket names for Cursor, VSCodium, Antigravity (PR #50).
+- `authUser` / `authPassword` settings for HTTP Basic Auth behind an nginx
+  reverse proxy (PR #51, adapted: credentials ride in the server URL since
+  the fetch-based client has no axios instance).
+- `untrustedWorkspaces` support declaration (PR #40).
+- README: editor-vs-total-time explanation (PR #54), WSL port-forwarding
+  notes (PR #37), compatible-editor buckets (PR #50).
+
+### Fixed
+- `maxHeartbeatsPerSec` ignored at any rate: `_lastBranch` was never stored,
+  so every event sent a heartbeat; fractional values like `0.5` now work
+  (PR #53, fixes #49).
+- Extension Host debug-console spam: logging moved to an `ActivityWatch`
+  Output channel (PR #53, fixes #30).
+- Heartbeat failures no longer raise a modal per failure and no longer log
+  `undefined` (proper `FetchError` message extraction; #12, #13).
+- `serverUrl` / `enabled` settings were declared but never read; they are
+  now honoured (with client recreation on Reload), covering custom ports
+  (#27) and remote setups.
+- Only the focused window sends heartbeats, preserving pulse merging with
+  multiple windows open (#38); Git branch resolves per-file repo (#41).
+- Missing `vscode.git` extension no longer throws during init.
+
+### Obsolete / not merged
+- PR #44 terminal tracking: superseded by the richer PR #48.
+- PR #31 remote-dev hack: 3-arg `AWClient` no longer exists; covered by #18.
+- Dependabot axios/nanoid/mocha bumps (#28, #32–#34): axios removed in 0.6.0.
+
 ## 0.6.0
 
 ### Changed

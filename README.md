@@ -9,16 +9,49 @@ The source code is available at https://github.com/ActivityWatch/aw-watcher-vsco
 ## Features
 
 Sends following data to ActivityWatch:
-- current project name
+- current project name and file name (plus path relative to the project root)
 - programming language
-- current file name
-- current Git branch
+- current Git branch, uncommitted change count, and remote URL
+- workspace name (from the `.code-workspace` file)
+- editor name (VS Code, Cursor, VSCodium, …)
+- active terminal name and working directory
+- cursor position, debug session state, and open editors
 
 Currently VS Code extensions don't support getting file/project names for non-editable files, therefore this results in the value "unknown" for those properties. (For instance when opening logo.png this happens)
+
+## Editor activity and total VS Code time
+
+This watcher records editor activity when the active text editor or its selection
+changes. Keeping VS Code focused does not continuously send editor heartbeats.
+Typing in the integrated terminal or interacting with a sidebar can therefore be
+missing from the editor bucket. That bucket is not a total of all VS Code usage.
+
+For total application usage, keep your window watcher and `aw-watcher-afk` running.
+In ActivityWatch's **Activity** view, select the correct host and date, then look
+for VS Code in **Top Applications** (for example, `code` on Linux/X11). Leave AFK
+filtering enabled to exclude idle periods according to your AFK timeout. This
+includes active use of terminals and sidebars while the VS Code window is active,
+but does not identify the pane, terminal command, file, or project used.
+
+Application names vary across platforms and VS Code variants. Window tracking
+requires a watcher compatible with your desktop; see the
+[window watcher list](https://docs.activitywatch.net/en/latest/watchers.html#window-watchers),
+including the alternatives for Wayland.
 
 ## Requirements
 
 This extension requires ActivityWatch to be running on your machine.
+
+## VS Code-compatible editors
+
+When this extension runs in VS Code-compatible editors, it uses a distinct
+ActivityWatch client and bucket name for each known editor so their activity
+streams do not overlap:
+
+- VS Code: `aw-watcher-vscode`
+- VSCodium: `aw-watcher-vscodium`
+- Cursor: `aw-watcher-cursor`
+- Antigravity: `aw-watcher-antigravity`
 
 ## Install Instructions
 
@@ -34,9 +67,10 @@ Use this in case VS Code has been started before the AW server.
 
 This extension adds the following settings:
 
-- `aw-watcher-vscode.maxHeartbeatsPerSec`: Controls the maximum number of heartbeats sent per second.
+- `aw-watcher-vscode.maxHeartbeatsPerSec`: Controls the maximum number of heartbeats sent per second. Fractional values are allowed (e.g. `0.5` sends one heartbeat every 2 seconds).
 - `aw-watcher-vscode.enabled`: Enable or disable the ActivityWatch editor watcher (default: `true`).
 - `aw-watcher-vscode.serverUrl`: Optional ActivityWatch server URL. Leave empty to use the default (`http://127.0.0.1:5600`).
+- `aw-watcher-vscode.authUser` / `aw-watcher-vscode.authPassword`: Optional HTTP Basic Auth credentials, for servers behind an nginx reverse proxy with `auth_basic`. Change takes effect after the **Reload ActivityWatch** command (or a window reload).
 
 ## Requirements
 
@@ -70,9 +104,34 @@ If you run into any errors or have feature requests, please [open an issue](http
 Calling out known issues can help limit users opening duplicate issues against your extension.
 -->
 
+## Notes on use with Windows Subsystem for Linux (WSL)
+
+#### Problem
+If you are running ActivityWatch on your Windows machine but work in VS Code inside a WSL remote window, aw-watcher-vscode will attempt to connect to the aw-server via localhost:5600, but since WSL runs on a different subnet than your Windows machine, port-forwarding IS required.
+
+#### Temporary Solution
+This can be accomplished by locating the "PORTS" view under `View > Open View > Ports` and selecting `Add Port`, then typing in `5600` (no quotes). This auto-forwards the WSL subnet's localhost port 5600 to your Windows machine's `localhost:5600`.
+
+#### Permanent Solution
+With the solution above it is necessary to repeat the step for each VS Code workspace you open. To permanently forward port `5600` to localhost instead:
+
+1. Open PowerShell on your Windows machine with admin privileges and run:
+    - `netsh interface portproxy add v4tov4 listenport=5600 connectport=5600 connectaddress=*`
+
+    - <b>NOTE:</b> If `connectaddress` is set to the WSL IP address rather than `*`, aw-server may fail to start because the port is already bound.
+
 ## Release Notes
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full release history. Highlights:
+
+### 0.7.0
+
+ - Terminal tracking: active terminal name and working directory (with `lsof` fallback), all-terminal labels.
+ - Editor enrichment: cursor position, Git dirty count + remote, debug state, open editors, relative paths, focus state.
+ - Only the focused window sends heartbeats (fixes multi-window pulse merging).
+ - `maxHeartbeatsPerSec` is now honoured, including fractional values; logging moved to an Output channel.
+ - Distinct buckets for Cursor / VSCodium / Antigravity; dynamic `editor` field; `workspace` field.
+ - `serverUrl` / `enabled` settings now take effect, plus Basic Auth support for nginx-proxied servers.
 
 ### 0.6.0
 
