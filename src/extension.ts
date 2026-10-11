@@ -1,6 +1,6 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the necessary extensibility types to use in your code below
-import { Disposable, ExtensionContext, commands, window, workspace, Uri, Extension, extensions } from 'vscode';
+import { Disposable, ExtensionContext, commands, window, workspace, Uri, Extension, extensions, env } from 'vscode';
 import { AWClient, IAppEditorEvent } from '../aw-client-js/src/aw-client';
 import { hostname } from 'os';
 import { API, GitExtension } from './git';
@@ -24,6 +24,25 @@ export function activate(context: ExtensionContext) {
     // Command:Reload
     const reloadCommand = commands.registerCommand('extension.reload', () => controller.init());
     context.subscriptions.push(reloadCommand);
+}
+
+// Each VS Code-compatible editor gets a distinct client/bucket name so
+// activity streams don't overlap when several are installed (PR #50).
+// Default VS Code behavior is preserved via the fallback.
+function activityWatchClientName(): string {
+    const appName = env.appName.toLowerCase();
+
+    if (appName.includes('cursor')) {
+        return 'aw-watcher-cursor';
+    }
+    if (appName.includes('antigravity')) {
+        return 'aw-watcher-antigravity';
+    }
+    if (appName.includes('codium')) {
+        return 'aw-watcher-vscodium';
+    }
+
+    return 'aw-watcher-vscode';
 }
 
 class ActivityWatch {
@@ -57,7 +76,7 @@ class ActivityWatch {
         this._bucket = {
             id: '',
             hostName: hostname(),
-            clientName: 'aw-watcher-vscode',
+            clientName: activityWatchClientName(),
             eventType: 'app.editor.activity'
         };
         this._bucket.id = `${this._bucket.clientName}_${this._bucket.hostName}`;
@@ -205,6 +224,7 @@ class ActivityWatch {
             timestamp: new Date(),
             duration: 0,
             data: {
+                editor: env.appName || 'VS Code',
                 language: this._getFileLanguage() || 'unknown',
                 project: this._getProjectFolder() || 'unknown',
                 file: this._getFilePath() || 'unknown',
