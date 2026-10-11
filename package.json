@@ -2,15 +2,15 @@
     "name": "aw-watcher-vscode",
     "displayName": "aw-watcher-vscode",
     "description": "Editor watcher for ActivityWatch, the free and open-source automated time tracker.",
-    "version": "0.7.0",
+    "version": "0.7.1",
     "repository": {
         "type": "git",
-        "url": "https://github.com/ActivityWatch/aw-watcher-vscode"
+        "url": "https://github.com/ComfyChloe/aw-watcher-vscode"
     },
     "publisher": "activitywatch",
     "author": "ActivityWatch Developers",
     "bugs": {
-        "url": "https://github.com/ActivityWatch/aw-watcher-vscode/issues"
+        "url": "https://github.com/ComfyChloe/aw-watcher-vscode/issues"
     },
     "engines": {
         "vscode": "^1.85.0",
@@ -55,12 +55,12 @@
                 "aw-watcher-vscode.enabled": {
                     "type": "boolean",
                     "default": true,
-                    "description": "Enable or disable the ActivityWatch editor watcher."
+                    "description": "Enable or disable the ActivityWatch editor watcher. Takes effect after the Reload ActivityWatch command (or a window reload)."
                 },
                 "aw-watcher-vscode.serverUrl": {
                     "type": "string",
                     "default": "",
-                    "description": "Optional ActivityWatch server URL. Leave empty to use the default (http://127.0.0.1:5600).",
+                    "description": "Optional ActivityWatch server URL. Leave empty to use the default (http://127.0.0.1:5600). Takes effect after the Reload ActivityWatch command (or a window reload).",
                     "examples": ["http://127.0.0.1:5600"]
                 },
                 "aw-watcher-vscode.authUser": {

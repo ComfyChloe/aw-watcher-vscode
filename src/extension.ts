@@ -18,6 +18,7 @@ import { basename, relative } from 'path';
 import { execFileSync } from 'child_process';
 import { API, GitExtension, Repository } from './git';
 import { DEFAULT_MAX_HEARTBEATS_PER_SEC, parseMaxHeartbeatsPerSec, shouldSendHeartbeat } from './throttle';
+import { buildBaseUrl } from './server';
 
 // The `vscode` npm type declarations in this project are old (1.x), while
 // terminal runtimes (activeTerminal, terminals, shellIntegration) and
@@ -74,6 +75,9 @@ function activityWatchClientName(): string {
     if (appName.includes('codium')) {
         return 'aw-watcher-vscodium';
     }
+    if (appName.includes('windsurf')) {
+        return 'aw-watcher-windsurf';
+    }
 
     return 'aw-watcher-vscode';
 }
@@ -110,6 +114,12 @@ class ActivityWatch {
     // Cache PID -> cwd for terminals without shellIntegration
     private _pidCwdCache: Map<number, { cwd: string; time: number }> = new Map();
     private _heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+    // _onEvent is async and awaits terminal lookups; overlapping VS Code
+    // events must not run the send path concurrently (duplicate/out-of-order
+    // heartbeats), so overlapping calls collapse into one trailing rerun.
+    private _eventInFlight: boolean = false;
+    private _eventQueued: boolean = false;
 
     constructor(private readonly _log: (message: string) => void) {
         this._bucket = {
@@ -184,12 +194,10 @@ class ActivityWatch {
         }
 
         // (Re)create client so serverUrl/auth changes apply on Reload
-        const clientOptions: { testing: boolean; baseURL?: string } = { testing: false };
-        const baseURL = this._buildBaseUrl();
-        if (baseURL) {
-            clientOptions.baseURL = baseURL;
-        }
-        this._client = new AWClient(this._bucket.clientName, clientOptions);
+        this._client = new AWClient(this._bucket.clientName, {
+            testing: false,
+            baseURL: this._buildBaseUrl(),
+        });
 
         // Create new Bucket (if not existing)
         this._client
@@ -248,24 +256,13 @@ class ActivityWatch {
         }
     }
 
-    // Resolve the AW server base URL. Custom host/port setups (PR #51) are
-    // covered by the serverUrl setting (fixes #27). When Basic Auth
-    // credentials are configured (nginx auth_basic), they are embedded in
-    // the URL since the fetch-based aw-client-js has no axios instance for
-    // header injection.
-    private _buildBaseUrl(): string | undefined {
-        let url = this._serverUrl || 'http://127.0.0.1:5600';
-        if (this._authUser && this._authPassword) {
-            try {
-                const parsed = new URL(url);
-                parsed.username = encodeURIComponent(this._authUser);
-                parsed.password = encodeURIComponent(this._authPassword);
-                url = parsed.toString().replace(/\/+$/, '');
-            } catch {
-                this._log(`Ignoring invalid serverUrl: ${url}`);
-            }
-        }
-        return url;
+    // Resolve the AW server base URL (pure helper in server.ts, unit tested).
+    // Custom host/port setups are covered by the serverUrl setting
+    // (fixes #27). Basic Auth credentials are embedded in the URL since
+    // the fetch-based aw-client-js has no axios instance for header
+    // injection.
+    private _buildBaseUrl(): string {
+        return buildBaseUrl(this._serverUrl, this._authUser, this._authPassword);
     }
 
     public dispose() {
@@ -300,6 +297,10 @@ class ActivityWatch {
                 if (lines[i] === 'fcwd' && i + 1 < lines.length && lines[i + 1].startsWith('n')) {
                     const cwd = lines[i + 1].substring(1);
                     if (cwd && cwd !== '/' && !cwd.startsWith('/dev')) {
+                        // Bound the cache: PIDs churn, entries are TTL-checked.
+                        if (this._pidCwdCache.size > 200) {
+                            this._pidCwdCache.clear();
+                        }
                         this._pidCwdCache.set(pid, { cwd, time: now });
                         return cwd;
                     }
@@ -325,7 +326,7 @@ class ActivityWatch {
         // Distinguish terminals sharing a name (e.g. multiple "zsh") by
         // their index in the terminals array.
         const terminals = runtimeWindow.terminals || [];
-        const termIndex = Array.prototype.indexOf.call(terminals, terminal);
+        const termIndex = terminals.indexOf(terminal);
         const termKey = `${terminal.name || ''}|${termIndex}`;
 
         if (termKey !== this._lastTerminalKey) {
@@ -334,7 +335,28 @@ class ActivityWatch {
         }
     }
 
-    private async _onEvent() {
+    private _onEvent() {
+        if (this._eventInFlight) {
+            this._eventQueued = true;
+            return;
+        }
+        // Fire-and-forget: _runEvent never rejects (all paths handled).
+        void this._runEvent();
+    }
+
+    private async _runEvent() {
+        this._eventInFlight = true;
+        try {
+            do {
+                this._eventQueued = false;
+                await this._collectAndSendHeartbeat();
+            } while (this._eventQueued);
+        } finally {
+            this._eventInFlight = false;
+        }
+    }
+
+    private async _collectAndSendHeartbeat() {
         if (!this._enabled || !this._bucketCreated) {
             return;
         }
@@ -455,21 +477,7 @@ class ActivityWatch {
         if (terminal) {
             data.active_terminal = terminal.name;
 
-            let termCwd = this._terminalCwd(terminal);
-            if (!termCwd && terminal.processId) {
-                try {
-                    const pid = await Promise.race([
-                        terminal.processId,
-                        new Promise<undefined>((r) => setTimeout(() => r(undefined), 500)),
-                    ]);
-                    if (pid !== undefined) {
-                        termCwd = this._getTerminalCwd(pid);
-                    }
-                } catch {
-                    // processId lookup failed: continue without cwd
-                }
-            }
-
+            const termCwd = await this._resolveTerminalCwd(terminal);
             if (termCwd) {
                 data.terminal_cwd = termCwd;
                 const desc = termCwd.split('/').pop() || termCwd.split('\\').pop() || '';
@@ -480,28 +488,17 @@ class ActivityWatch {
             }
         }
 
-        // All terminals, labelled with their cwd project for context
+        // All terminals, labelled with their cwd project for context.
+        // Resolved concurrently so one hung lookup can't stall the rest.
         const terminals = runtimeWindow.terminals || [];
         data.terminal_count = terminals.length;
         if (terminals.length > 0) {
+            const cwdList = await Promise.all(terminals.map((t) => this._resolveTerminalCwd(t)));
             const termLabels: string[] = [];
-            for (const t of terminals) {
-                const name = t.name || '';
+            for (let i = 0; i < terminals.length; i++) {
+                const name = terminals[i].name || '';
                 let label = name;
-                let cwdStr = this._terminalCwd(t);
-                if (!cwdStr && t.processId) {
-                    try {
-                        const pid = await Promise.race([
-                            t.processId,
-                            new Promise<undefined>((r) => setTimeout(() => r(undefined), 500)),
-                        ]);
-                        if (pid !== undefined) {
-                            cwdStr = this._getTerminalCwd(pid);
-                        }
-                    } catch {
-                        // ignore, keep name-only label
-                    }
-                }
+                const cwdStr = cwdList[i];
                 if (cwdStr) {
                     const dirName = cwdStr.split('/').pop() || cwdStr.split('\\').pop() || '';
                     if (dirName) {
@@ -531,6 +528,30 @@ class ActivityWatch {
             duration: 0,
             data: data as unknown as IAppEditorEvent['data'],
         };
+    }
+
+    // Resolve a terminal's cwd: shellIntegration first, then the lsof PID
+    // fallback (capped at 500ms so a hung lookup can't stall heartbeats).
+    private async _resolveTerminalCwd(terminal: RuntimeTerminal): Promise<string> {
+        const direct = this._terminalCwd(terminal);
+        if (direct) {
+            return direct;
+        }
+        if (!terminal.processId) {
+            return '';
+        }
+        try {
+            const pid = await Promise.race([
+                terminal.processId,
+                new Promise<undefined>((r) => setTimeout(() => r(undefined), 500)),
+            ]);
+            if (pid !== undefined) {
+                return this._getTerminalCwd(pid);
+            }
+        } catch {
+            // processId lookup failed: continue without cwd
+        }
+        return '';
     }
 
     // shellIntegration cwd may be a string or a Uri-like object.

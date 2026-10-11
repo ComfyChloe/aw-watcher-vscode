@@ -51,6 +51,7 @@ streams do not overlap:
 - VS Code: `aw-watcher-vscode`
 - VSCodium: `aw-watcher-vscodium`
 - Cursor: `aw-watcher-cursor`
+- Windsurf: `aw-watcher-windsurf`
 - Antigravity: `aw-watcher-antigravity`
 
 ## Install Instructions
