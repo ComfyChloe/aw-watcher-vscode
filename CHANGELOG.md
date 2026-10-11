@@ -1,5 +1,26 @@
 # Change Log
 
+## 0.7.1
+
+Code-review fixes over 0.7.0.
+
+### Fixed
+- Overlapping `_onEvent` runs (async terminal lookups) could send duplicate
+  or out-of-order heartbeats; overlapping calls now collapse into one
+  trailing rerun.
+- Basic Auth credentials with special characters were double-encoded in the
+  server URL; URL building moved to a unit-tested `src/server.ts`.
+- Unbounded PID→cwd cache is now capped.
+
+### Added
+- Windsurf mapping for distinct editor buckets.
+- All terminal cwd lookups resolve concurrently (one hung lookup no longer
+  stalls the rest).
+
+### Changed
+- `repository` / `bugs` URLs point at this maintained fork.
+- `enabled` / `serverUrl` setting descriptions note the Reload requirement.
+
 ## 0.7.0
 
 Roll-up release merging all pending community contributions, adapted to the
