@@ -44,7 +44,8 @@
                 "aw-watcher-vscode.maxHeartbeatsPerSec": {
                     "type": "number",
                     "default": 1,
-                    "description": "Controls the maximum number of hearbeats sent per second."
+                    "exclusiveMinimum": 0,
+                    "description": "Controls the maximum number of heartbeats sent per second. Fractional values are allowed (e.g. 0.5 sends one heartbeat every 2 seconds)."
                 },
                 "aw-watcher-vscode.enabled": {
                     "type": "boolean",
@@ -77,7 +78,7 @@
         "format:check": "prettier --check \"src/**/*.ts\"",
         "vscode:prepublish": "npm run compile",
         "test": "npm run compile && vscode-test",
-        "test:mocha": "npm run compile && node ./node_modules/mocha/bin/mocha ./out/src/test/extension.test.js",
+        "test:mocha": "npm run compile && node ./node_modules/mocha/bin/mocha ./out/src/test/*.test.js",
         "package": "vsce package --no-dependencies"
     },
     "devDependencies": {

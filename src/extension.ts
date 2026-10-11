@@ -4,14 +4,20 @@ import { Disposable, ExtensionContext, commands, window, workspace, Uri, Extensi
 import { AWClient, IAppEditorEvent } from '../aw-client-js/src/aw-client';
 import { hostname } from 'os';
 import { API, GitExtension } from './git';
+import { DEFAULT_MAX_HEARTBEATS_PER_SEC, parseMaxHeartbeatsPerSec, shouldSendHeartbeat } from './throttle';
 
 // This method is called when your extension is activated. Activation is
 // controlled by the activation events defined in package.json.
 export function activate(context: ExtensionContext) {
-    console.log('Congratulations, your extension "ActivityWatch" is now active!');
+    // Log to a dedicated Output channel instead of the console, so the
+    // extension does not spam the Extension Host debug console (#30).
+    const output = window.createOutputChannel('ActivityWatch');
+    context.subscriptions.push(output);
+    const log = (message: string) => output.appendLine(`[${new Date().toISOString()}] ${message}`);
+    log('Extension activated');
 
     // Init ActivityWatch
-    const controller = new ActivityWatch();
+    const controller = new ActivityWatch(log);
     controller.init();
     context.subscriptions.push(controller);
 
@@ -36,7 +42,7 @@ class ActivityWatch {
 
     // Heartbeat handling
     private _pulseTime: number = 20;
-    private _maxHeartbeatsPerSec: number = 1;
+    private _maxHeartbeatsPerSec: number = DEFAULT_MAX_HEARTBEATS_PER_SEC;
     private _lastFilePath: string = '';
     private _lastHeartbeatTime: number = 0; // Date.getTime()
     private _lastBranch: string = '';
@@ -47,7 +53,7 @@ class ActivityWatch {
     private _authUser: string = '';
     private _authPassword: string = '';
 
-    constructor() {
+    constructor(private readonly _log: (message: string) => void) {
         this._bucket = {
             id: '',
             hostName: hostname(),
@@ -70,7 +76,7 @@ class ActivityWatch {
         this.loadConfigurations();
 
         if (!this._enabled) {
-            console.log('[ActivityWatch] Extension disabled via aw-watcher-vscode.enabled setting');
+            this._log('Extension disabled via aw-watcher-vscode.enabled setting');
             this._bucketCreated = false;
             return;
         }
@@ -87,16 +93,16 @@ class ActivityWatch {
         this._client.ensureBucket(this._bucket.id, this._bucket.eventType, this._bucket.hostName)
             .then((res) => {
                 if (res.alreadyExist) {
-                    console.log('Bucket already exists');
+                    this._log(`Bucket ${this._bucket.id} already exists`);
                 } else {
-                    console.log('Created Bucket');
+                    this._log(`Created bucket ${this._bucket.id}`);
                 }
                 this._bucketCreated = true;
             })
             .catch(err => {
                 this._handleError("Couldn't create Bucket. Please make sure the server is running properly and then run the [Reload ActivityWatch] command.", true);
                 this._bucketCreated = false;
-                console.error(err);
+                this._log(`Error creating bucket: ${err instanceof Error ? err.message : String(err)}`);
             });
         this.initGit().then((res) => this._git = res);
     }
@@ -109,10 +115,7 @@ class ActivityWatch {
 
     public loadConfigurations() {
         const extConfigurations = workspace.getConfiguration('aw-watcher-vscode');
-        const maxHeartbeatsPerSec = extConfigurations.get('maxHeartbeatsPerSec');
-        if (maxHeartbeatsPerSec) {
-            this._maxHeartbeatsPerSec = maxHeartbeatsPerSec as number;
-        }
+        this._maxHeartbeatsPerSec = parseMaxHeartbeatsPerSec(extConfigurations.get('maxHeartbeatsPerSec'));
         const enabled = extConfigurations.get('enabled');
         if (typeof enabled === 'boolean') {
             this._enabled = enabled;
@@ -144,8 +147,8 @@ class ActivityWatch {
                 parsed.username = encodeURIComponent(this._authUser);
                 parsed.password = encodeURIComponent(this._authPassword);
                 url = parsed.toString().replace(/\/+$/, '');
-            } catch (err) {
-                console.warn('[ActivityWatch] Ignoring invalid serverUrl:', url, err);
+            } catch {
+                this._log(`Ignoring invalid serverUrl: ${url}`);
             }
         }
         return url;
@@ -163,16 +166,18 @@ class ActivityWatch {
         // Create and send heartbeat
         try {
             const heartbeat = this._createHeartbeat();
-            const filePath = this._getFilePath();
-            const curTime = new Date().getTime();
-            const branch = this._getCurrentBranch();
+            const current = {
+                file: heartbeat.data.file,
+                branch: String(heartbeat.data.branch),
+                time: heartbeat.timestamp.getTime()
+            };
+            const last = { file: this._lastFilePath, branch: this._lastBranch, time: this._lastHeartbeatTime };
 
             // Send heartbeat if file changed, branch changed or enough time passed
-            if (filePath !== this._lastFilePath ||
-                    branch !== this._lastBranch ||
-                    this._lastHeartbeatTime + (1000 / (this._maxHeartbeatsPerSec)) < curTime) {
-                this._lastFilePath = filePath || 'unknown';
-                this._lastHeartbeatTime = curTime;
+            if (shouldSendHeartbeat(last, current, this._maxHeartbeatsPerSec)) {
+                this._lastFilePath = current.file;
+                this._lastBranch = current.branch;
+                this._lastHeartbeatTime = current.time;
                 this._sendHeartbeat(heartbeat);
             }
         }
@@ -184,10 +189,14 @@ class ActivityWatch {
 
     private _sendHeartbeat(event: IAppEditorEvent) {
         return this._client.heartbeat(this._bucket.id, this._pulseTime, event)
-            .then(() => console.log('Sent heartbeat', event))
-            .catch(({ err }) => {
-                console.error('sendHeartbeat error: ', err);
-                this._handleError('Error while sending heartbeat', true);
+            .catch((err: unknown) => {
+                // Log-only: heartbeat failures are transient (server restart,
+                // network blip) and a modal on every failure spams the user
+                // (#12, #13). Bucket-creation failure still raises a toast.
+                // Note: the fetch-based client rejects with FetchError, not
+                // `{ err }`, so extract the message properly.
+                const message = err instanceof Error ? err.message : String(err);
+                this._log(`Error sending heartbeat: ${message}`);
             });
     }
 
@@ -253,11 +262,11 @@ class ActivityWatch {
 
     private _handleError(err: string, isCritical = false): undefined {
         if (isCritical) {
-            console.error('[ActivityWatch][handleError]', err);
+            this._log(`Error: ${err}`);
             window.showErrorMessage(`[ActivityWatch] ${err}`);
         }
         else {
-            console.warn('[AcitivtyWatch][handleError]', err);
+            this._log(`Warning: ${err}`);
         }
         return;
     }
