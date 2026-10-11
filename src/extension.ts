@@ -22,7 +22,7 @@ export function activate(context: ExtensionContext) {
 
 class ActivityWatch {
     private _disposable: Disposable;
-    private _client: AWClient;
+    private _client!: AWClient;
     private _git: API | undefined;
 
     // Bucket info
@@ -41,6 +41,12 @@ class ActivityWatch {
     private _lastHeartbeatTime: number = 0; // Date.getTime()
     private _lastBranch: string = '';
 
+    // Server configuration (loaded in init via loadConfigurations)
+    private _enabled: boolean = true;
+    private _serverUrl: string = '';
+    private _authUser: string = '';
+    private _authPassword: string = '';
+
     constructor() {
         this._bucket = {
             id: '',
@@ -50,8 +56,8 @@ class ActivityWatch {
         };
         this._bucket.id = `${this._bucket.clientName}_${this._bucket.hostName}`;
 
-        // Create AWClient
-        this._client = new AWClient(this._bucket.clientName, { testing: false });
+        // NOTE: AWClient is (re)created in init() so the Reload command
+        // picks up serverUrl/auth changes.
 
         // subscribe to VS Code Events
         const subscriptions: Disposable[] = [];
@@ -61,6 +67,22 @@ class ActivityWatch {
     }
 
     public init() {
+        this.loadConfigurations();
+
+        if (!this._enabled) {
+            console.log('[ActivityWatch] Extension disabled via aw-watcher-vscode.enabled setting');
+            this._bucketCreated = false;
+            return;
+        }
+
+        // (Re)create client so serverUrl/auth changes apply on Reload
+        const clientOptions: { testing: boolean; baseURL?: string } = { testing: false };
+        const baseURL = this._buildBaseUrl();
+        if (baseURL) {
+            clientOptions.baseURL = baseURL;
+        }
+        this._client = new AWClient(this._bucket.clientName, clientOptions);
+
         // Create new Bucket (if not existing)
         this._client.ensureBucket(this._bucket.id, this._bucket.eventType, this._bucket.hostName)
             .then((res) => {
@@ -77,7 +99,6 @@ class ActivityWatch {
                 console.error(err);
             });
         this.initGit().then((res) => this._git = res);
-        this.loadConfigurations();
     }
 
     private async initGit() {
@@ -92,6 +113,42 @@ class ActivityWatch {
         if (maxHeartbeatsPerSec) {
             this._maxHeartbeatsPerSec = maxHeartbeatsPerSec as number;
         }
+        const enabled = extConfigurations.get('enabled');
+        if (typeof enabled === 'boolean') {
+            this._enabled = enabled;
+        }
+        const serverUrl = extConfigurations.get('serverUrl');
+        if (typeof serverUrl === 'string') {
+            this._serverUrl = serverUrl.trim().replace(/\/+$/, '');
+        }
+        const authUser = extConfigurations.get('authUser');
+        if (typeof authUser === 'string') {
+            this._authUser = authUser;
+        }
+        const authPassword = extConfigurations.get('authPassword');
+        if (typeof authPassword === 'string') {
+            this._authPassword = authPassword;
+        }
+    }
+
+    // Resolve the AW server base URL. Custom host/port setups (PR #51) are
+    // covered by the serverUrl setting (fixes #27). When Basic Auth
+    // credentials are configured (nginx auth_basic), they are embedded in
+    // the URL since the fetch-based aw-client-js has no axios instance to
+    // inject headers into.
+    private _buildBaseUrl(): string | undefined {
+        let url = this._serverUrl || 'http://127.0.0.1:5600';
+        if (this._authUser && this._authPassword) {
+            try {
+                const parsed = new URL(url);
+                parsed.username = encodeURIComponent(this._authUser);
+                parsed.password = encodeURIComponent(this._authPassword);
+                url = parsed.toString().replace(/\/+$/, '');
+            } catch (err) {
+                console.warn('[ActivityWatch] Ignoring invalid serverUrl:', url, err);
+            }
+        }
+        return url;
     }
 
     public dispose() {
@@ -99,7 +156,7 @@ class ActivityWatch {
     }
 
     private _onEvent() {
-        if (!this._bucketCreated) {
+        if (!this._enabled || !this._bucketCreated) {
             return;
         }
 

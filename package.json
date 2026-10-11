@@ -56,6 +56,16 @@
                     "default": "",
                     "description": "Optional ActivityWatch server URL. Leave empty to use the default (http://127.0.0.1:5600).",
                     "examples": ["http://127.0.0.1:5600"]
+                },
+                "aw-watcher-vscode.authUser": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Username for HTTP Basic Auth (for servers behind an nginx reverse proxy with auth_basic)."
+                },
+                "aw-watcher-vscode.authPassword": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Password for HTTP Basic Auth (for servers behind an nginx reverse proxy with auth_basic)."
                 }
             }
         }
